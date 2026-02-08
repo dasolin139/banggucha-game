@@ -164,7 +164,9 @@ class BangguchaGame {
             moveDelay: 0.12,
             invincible: 0,
             exhaust: [],
+            shootCooldown: 0,
         };
+        this.bullets = [];
         this.grid[1][1] = EMPTY;
 
         // Place exit at bottom-right area
@@ -242,6 +244,7 @@ class BangguchaGame {
     // ============================================================
     update(dt) {
         this.updatePlayer(dt);
+        this.updateBullets(dt);
         this.updateEnemies(dt);
         this.updateParticles(dt);
         this.checkCollisions();
@@ -255,6 +258,7 @@ class BangguchaGame {
     updatePlayer(dt) {
         const p = this.player;
         p.moveTimer -= dt;
+        p.shootCooldown -= dt;
 
         if (p.moveTimer <= 0) {
             let dx = 0, dy = 0;
@@ -267,7 +271,6 @@ class BangguchaGame {
                 const nx = p.x + dx;
                 const ny = p.y + dy;
                 if (nx >= 0 && nx < COLS && ny >= 0 && ny < ROWS && this.grid[ny][nx] !== WALL) {
-                    // Add exhaust particle at old position
                     p.exhaust.push({
                         x: p.x * TILE + TILE / 2,
                         y: p.y * TILE + TILE / 2,
@@ -282,10 +285,127 @@ class BangguchaGame {
             }
         }
 
+        // Shoot (Spacebar)
+        if ((this.keys[' '] || this.keys['f'] || this.keys['F']) && p.shootCooldown <= 0) {
+            this.shoot();
+            p.shootCooldown = 0.4;
+        }
+
         // Update exhaust
         p.exhaust = p.exhaust.filter(e => {
             e.life -= dt;
             return e.life > 0;
+        });
+    }
+
+    shoot() {
+        const p = this.player;
+        const dirMap = {
+            UP:    { dx: 0, dy: -1 },
+            DOWN:  { dx: 0, dy: 1 },
+            LEFT:  { dx: -1, dy: 0 },
+            RIGHT: { dx: 1, dy: 0 },
+        };
+        const d = dirMap[p.dir];
+
+        this.bullets.push({
+            x: p.x * TILE + TILE / 2,
+            y: p.y * TILE + TILE / 2,
+            vx: d.dx * 280,
+            vy: d.dy * 280,
+            life: 2.0,
+            size: 8,
+            wobble: 0,
+            trail: [],
+        });
+
+        // Recoil smoke at cannon tip
+        for (let i = 0; i < 5; i++) {
+            this.particles.push({
+                x: p.x * TILE + TILE / 2 + d.dx * 16,
+                y: p.y * TILE + TILE / 2 + d.dy * 16,
+                vx: d.dx * 30 + (Math.random() - 0.5) * 40,
+                vy: d.dy * 30 + (Math.random() - 0.5) * 40,
+                life: 0.3,
+                maxLife: 0.3,
+                color: '#88aa44',
+                size: randInt(3, 6),
+            });
+        }
+    }
+
+    updateBullets(dt) {
+        this.bullets = this.bullets.filter(b => {
+            // Save trail position
+            b.trail.push({ x: b.x, y: b.y, life: 0.2 });
+            b.trail = b.trail.filter(t => { t.life -= dt; return t.life > 0; });
+
+            b.x += b.vx * dt;
+            b.y += b.vy * dt;
+            b.life -= dt;
+            b.wobble += dt * 15;
+            b.size = 8 + Math.sin(b.wobble) * 2;
+
+            // Grid position
+            const gx = Math.floor(b.x / TILE);
+            const gy = Math.floor(b.y / TILE);
+
+            // Wall collision
+            if (gx < 0 || gx >= COLS || gy < 0 || gy >= ROWS || this.grid[gy][gx] === WALL) {
+                // Wall hit particles
+                for (let i = 0; i < 8; i++) {
+                    const angle = Math.random() * Math.PI * 2;
+                    this.particles.push({
+                        x: b.x, y: b.y,
+                        vx: Math.cos(angle) * 80,
+                        vy: Math.sin(angle) * 80,
+                        life: 0.4, maxLife: 0.4,
+                        color: ['#88aa44', '#aacc66', '#667733'][randInt(0, 2)],
+                        size: randInt(2, 5),
+                    });
+                }
+                return false;
+            }
+
+            // Enemy hit detection
+            for (let i = this.enemies.length - 1; i >= 0; i--) {
+                const enemy = this.enemies[i];
+                const ex = enemy.x * TILE + TILE / 2;
+                const ey = enemy.y * TILE + TILE / 2;
+                const dist = Math.hypot(b.x - ex, b.y - ey);
+
+                if (dist < TILE * 0.7) {
+                    // Enemy destroyed!
+                    this.score += 200 * this.stage;
+                    this.updateHUD();
+
+                    // Big explosion
+                    for (let j = 0; j < 20; j++) {
+                        const angle = Math.random() * Math.PI * 2;
+                        const speed = 60 + Math.random() * 140;
+                        this.particles.push({
+                            x: ex, y: ey,
+                            vx: Math.cos(angle) * speed,
+                            vy: Math.sin(angle) * speed,
+                            life: 0.7, maxLife: 0.7,
+                            color: ['#ff4444', '#ff8800', '#ffcc00', '#88aa44'][randInt(0, 3)],
+                            size: randInt(3, 8),
+                        });
+                    }
+
+                    // Score popup
+                    this.flagCollectAnim.push({
+                        x: ex, y: ey,
+                        time: 0,
+                        text: '+' + (200 * this.stage),
+                    });
+
+                    this.enemies.splice(i, 1);
+                    return false;
+                }
+            }
+
+            return b.life > 0;
         });
     }
 
@@ -451,6 +571,7 @@ class BangguchaGame {
         this.renderMaze(ctx);
         this.renderExit(ctx);
         this.renderFlags(ctx);
+        this.renderBullets(ctx);
         this.renderEnemies(ctx);
         this.renderPlayer(ctx);
         this.renderParticles(ctx);
@@ -731,6 +852,68 @@ class BangguchaGame {
             ctx.beginPath();
             ctx.arc(px + TILE / 2, py + TILE / 2, 18, 0, Math.PI * 2);
             ctx.fill();
+            ctx.restore();
+        }
+    }
+
+    renderBullets(ctx) {
+        const time = performance.now() / 1000;
+
+        for (const b of this.bullets) {
+            // Trail (fart gas trail)
+            for (const t of b.trail) {
+                const alpha = t.life / 0.2;
+                ctx.save();
+                ctx.globalAlpha = alpha * 0.3;
+                ctx.fillStyle = '#88aa44';
+                ctx.beginPath();
+                ctx.arc(t.x, t.y, 5 * alpha, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+
+            // Main fart cloud
+            const wobX = Math.sin(b.wobble) * 2;
+            const wobY = Math.cos(b.wobble * 1.3) * 2;
+
+            // Outer glow
+            ctx.save();
+            ctx.globalAlpha = 0.3;
+            ctx.fillStyle = '#667733';
+            ctx.beginPath();
+            ctx.arc(b.x + wobX, b.y + wobY, b.size + 4, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+
+            // Main cloud body (multiple overlapping circles for cloud shape)
+            ctx.fillStyle = '#99bb44';
+            ctx.beginPath();
+            ctx.arc(b.x + wobX, b.y + wobY, b.size, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.fillStyle = '#aacc55';
+            ctx.beginPath();
+            ctx.arc(b.x + wobX - 3, b.y + wobY - 2, b.size * 0.7, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.fillStyle = '#bbdd66';
+            ctx.beginPath();
+            ctx.arc(b.x + wobX + 2, b.y + wobY + 1, b.size * 0.5, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Stink lines
+            ctx.save();
+            ctx.globalAlpha = 0.5;
+            ctx.strokeStyle = '#667733';
+            ctx.lineWidth = 1.5;
+            for (let i = 0; i < 3; i++) {
+                const offset = (i - 1) * 5;
+                const wave = Math.sin(time * 8 + i * 2) * 3;
+                ctx.beginPath();
+                ctx.moveTo(b.x + offset, b.y - b.size - 2);
+                ctx.quadraticCurveTo(b.x + offset + wave, b.y - b.size - 8, b.x + offset - wave, b.y - b.size - 14);
+                ctx.stroke();
+            }
             ctx.restore();
         }
     }
